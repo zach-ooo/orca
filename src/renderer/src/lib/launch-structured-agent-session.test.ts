@@ -516,6 +516,69 @@ describe('structured agent session launch', () => {
     expect(error).toMatchObject({ code: 'structured_agent_session_unsupported' })
   })
 
+  it.each([
+    ['claude', 'local'],
+    ['codex', 'local'],
+    ['claude', 'runtime:server-1'],
+    ['codex', 'runtime:server-1']
+  ] as const)(
+    'uses %s precommit proof from %s without broadening the code allowlist',
+    async (agent, host) => {
+      mockSupportedCreate(() => ({
+        ok: false,
+        refusal: {
+          code: 'agent_session_identity_required',
+          message: 'Host diagnostic',
+          details: { reason: 'transcriptNotFound' },
+          createAttemptRefusedBeforeCommit: true
+        }
+      }))
+      const intent = createStructuredAgentSessionLaunchIntent(
+        'workspace-missing-history',
+        agent,
+        host,
+        { providerSessionId: 'missing-provider-session' }
+      )
+
+      const error = await launchStructuredAgentSession(intent).catch((caught: unknown) => caught)
+
+      expect(error).toBeInstanceOf(StructuredAgentSessionCreateRefusalError)
+      expect(error).toMatchObject({
+        code: 'agent_session_identity_required',
+        refusal: {
+          code: 'agent_session_identity_required',
+          details: { reason: 'transcriptNotFound' }
+        }
+      })
+      expect(callStructuredAgentSession).toHaveBeenLastCalledWith(
+        host === 'local' ? { kind: 'local' } : { kind: 'environment', environmentId: 'server-1' },
+        'agentSession.create',
+        intent.params
+      )
+    }
+  )
+
+  it.each(['recordMissing', 'transcriptUnreadable', undefined])(
+    'keeps identity refusal with reason %s unknown despite an unrelated precommit field',
+    async (reason) => {
+      mockSupportedCreate(() => ({
+        ok: false,
+        refusal: {
+          code: 'agent_session_identity_required',
+          message: 'Identity unavailable',
+          details: { reason },
+          createAttemptRefusedBeforeCommit: true
+        }
+      }))
+
+      await expect(
+        launchStructuredAgentSession(
+          createStructuredAgentSessionLaunchIntent('workspace-1', 'codex')
+        )
+      ).rejects.toBeInstanceOf(StructuredAgentSessionCreateUnknownOutcomeError)
+    }
+  )
+
   it.each(['method_not_found', 'structured_agent_session_unsupported'])(
     'turns an old-host %s error into a definitive transport refusal',
     async (code) => {

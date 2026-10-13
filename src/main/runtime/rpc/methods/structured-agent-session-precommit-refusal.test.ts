@@ -8,6 +8,7 @@ import { setStructuredAgentSessionHost } from '../../../native-chat/agent-sessio
 import { recordingStructuredAgentSessionLogger } from '../../../native-chat/agent-session-wire/structured-agent-session-logger-test-support'
 import { computeAgentSessionPayloadFingerprint } from '../../../../shared/agent-session-mutation-envelope'
 import { isDefinitiveAgentSessionCreateRefusal } from '../../../../shared/agent-session-definitive-refusal'
+import { agentSessionRefusalError } from '../../../../shared/agent-session-wire-refusals'
 import { STRUCTURED_AGENT_SESSION_RUNTIME_CAPABILITY } from '../../../../shared/protocol-version'
 import type { OrcaRuntimeService } from '../../orca-runtime'
 import type { RpcResponse } from '../core'
@@ -130,6 +131,29 @@ afterEach(() => {
 })
 
 describe('a create refused before it commits', () => {
+  it('marks a missing transcript only when preparation refuses before commit', async () => {
+    const response = await create({
+      resolveStructuredAgentSessionCreateIntent: vi.fn(async () => {
+        throw agentSessionRefusalError('agent_session_identity_required', {
+          reason: 'transcriptNotFound'
+        })
+      })
+    })
+
+    expect(response).toMatchObject({
+      ok: true,
+      result: {
+        ok: false,
+        refusal: {
+          code: 'agent_session_identity_required',
+          details: { reason: 'transcriptNotFound' },
+          createAttemptRefusedBeforeCommit: true
+        }
+      }
+    })
+    expect(attach).not.toHaveBeenCalled()
+  })
+
   it('answers a code-carrying refusal as a definitive envelope', async () => {
     const response = await create({
       resolveStructuredAgentSessionCreateIntent: vi.fn(async () => {
@@ -197,6 +221,24 @@ describe('a create refused before it commits', () => {
 })
 
 describe('the boundary the envelope stops at', () => {
+  it('does not mark a missing transcript returned from the commit path', async () => {
+    attach.mockResolvedValueOnce({
+      ok: false,
+      refusal: agentSessionRefusalError('agent_session_identity_required', {
+        reason: 'transcriptNotFound'
+      }).refusal
+    })
+
+    const response = await create()
+
+    expect(response).toMatchObject({
+      ok: true,
+      result: { ok: false, refusal: { code: 'agent_session_identity_required' } }
+    })
+    expect(refusalOf(response)).not.toHaveProperty('createAttemptRefusedBeforeCommit')
+    expect(attach).toHaveBeenCalledOnce()
+  })
+
   it('leaves a failure at attach unknown, because it may have committed', async () => {
     attach.mockRejectedValueOnce(new Error('attach exploded'))
 

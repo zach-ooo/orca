@@ -46,6 +46,7 @@ vi.mock('@/lib/agent-catalog', () => ({
 import {
   getStructuredAgentSessionLaunchLifecycle,
   retryStructuredAgentSessionLaunch,
+  shouldRetainStructuredAgentSessionLaunchTab,
   startStructuredAgentLaunch
 } from './structured-agent-session-launch'
 import {
@@ -53,6 +54,7 @@ import {
   resetStructuredAgentLaunchRegistryForTests
 } from './structured-agent-session-launch-registry'
 import { resetStructuredAgentLaunchPersistenceForTests } from './structured-agent-session-launch-persistence'
+import { structuredSessionNotices } from '@/components/native-chat/native-chat-structured-session-notices'
 
 const WORKTREE = 'wt-1'
 const EXIT_REASON = 'claude stream-json exited (code 1): stderr tail'
@@ -126,6 +128,88 @@ beforeEach(() => {
 })
 
 describe('structured launch after a host-failed create', () => {
+  it.each([true, false])(
+    'keeps the failed tab and existing notice only with precommit proof (%s)',
+    async (precommitProof) => {
+      mocks.call.mockImplementation(async (_target, method) =>
+        method === 'agentSession.createSupport'
+          ? { supported: true }
+          : {
+              ok: false,
+              refusal: {
+                code: 'agent_session_identity_required',
+                message: 'Host diagnostic',
+                details: { reason: 'transcriptNotFound' },
+                ...(precommitProof ? { createAttemptRefusedBeforeCommit: true } : {})
+              }
+            }
+      )
+      const started = startStructuredAgentLaunch(WORKTREE, 'codex', {
+        requestId: 'missing-history',
+        resumeFrom: { providerSessionId: 'missing-thread' }
+      })
+      await started.launchResult.catch(() => undefined)
+
+      const lifecycle = getStructuredAgentSessionLaunchLifecycle(WORKTREE, started.sessionId)
+      expect(lifecycle).toBe(precommitProof ? 'failed' : 'visibility-unknown')
+      expect(shouldRetainStructuredAgentSessionLaunchTab(WORKTREE, started.sessionId)).toBe(true)
+      const notices = structuredSessionNotices({
+        launch: {
+          lifecycle,
+          failure: getStructuredAgentSessionLaunchFailure(WORKTREE, started.sessionId),
+          retry: () => {}
+        },
+        agentLabel: 'Codex',
+        sessionError: null,
+        composerError: null
+      })
+      expect(notices).toEqual([
+        expect.objectContaining({
+          text: precommitProof
+            ? 'Chat could not be started.'
+            : 'Chat connection could not be confirmed.',
+          action: expect.objectContaining({ label: 'Retry' })
+        })
+      ])
+      expect(mocks.refresh).toHaveBeenCalledTimes(precommitProof ? 0 : 2)
+    }
+  )
+
+  it('keeps an uncertain earlier create unknown when its replay refuses before commit', async () => {
+    let calls = 0
+    mocks.call.mockImplementation(async (_target, method) => {
+      if (method === 'agentSession.createSupport') {
+        return { supported: true }
+      }
+      if (calls++ === 0) {
+        throw new Error('Reply timed out after create may have committed')
+      }
+      return {
+        ok: false,
+        refusal: {
+          code: 'agent_session_identity_required',
+          details: { reason: 'transcriptNotFound' },
+          createAttemptRefusedBeforeCommit: true
+        }
+      }
+    })
+    const started = startStructuredAgentLaunch(WORKTREE, 'codex', {
+      requestId: 'lost-create-reply',
+      resumeFrom: { providerSessionId: 'missing-thread' }
+    })
+    await started.launchResult.catch(() => undefined)
+
+    expect(getStructuredAgentSessionLaunchLifecycle(WORKTREE, started.sessionId)).toBe(
+      'visibility-unknown'
+    )
+    expect(shouldRetainStructuredAgentSessionLaunchTab(WORKTREE, started.sessionId)).toBe(true)
+    const envelopes = mocks.call.mock.calls
+      .filter(([, method]) => method === 'agentSession.create')
+      .map(([, , params]) => params.envelope)
+    expect(envelopes).toHaveLength(2)
+    expect(envelopes[1]).toBe(envelopes[0])
+  })
+
   it('fails with the host refusal when the provider is proven gone, and Retry starts it under a new operation', async () => {
     const sessionId = launch()
     await settle(sessionId)

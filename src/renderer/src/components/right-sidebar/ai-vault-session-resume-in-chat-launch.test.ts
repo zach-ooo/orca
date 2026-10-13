@@ -129,4 +129,21 @@ describe('resumeAiVaultSessionInNewChat', () => {
     await Promise.resolve()
     expect(mocks.toastError).not.toHaveBeenCalled()
   })
+
+  it('shows the existing missing-history toast after a definite refusal', async () => {
+    const error = Object.assign(new Error('Host diagnostic'), {
+      code: 'agent_session_identity_required'
+    })
+    mocks.beginStructuredAgentSessionProvisionalLaunch.mockReturnValue({
+      sessionId: 'session-1',
+      tab: { id: 'agent-session:session-1' },
+      settlement: Promise.resolve({ kind: 'failed', error })
+    })
+
+    await resumeAiVaultSessionInNewChat(session, 'codex', 'worktree-1', 'resume-missing-history')
+
+    expect(mocks.toastError).toHaveBeenCalledExactlyOnceWith(
+      "This conversation's history could not be loaded, so it cannot be resumed in chat."
+    )
+  })
 })
