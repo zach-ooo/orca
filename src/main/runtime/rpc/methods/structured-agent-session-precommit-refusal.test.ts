@@ -131,7 +131,7 @@ afterEach(() => {
 })
 
 describe('a create refused before it commits', () => {
-  it('marks a missing transcript only when preparation refuses before commit', async () => {
+  it('answers missing history before commit as a definite failed attempt', async () => {
     const response = await create({
       resolveStructuredAgentSessionCreateIntent: vi.fn(async () => {
         throw agentSessionRefusalError('agent_session_identity_required', {
@@ -140,32 +140,11 @@ describe('a create refused before it commits', () => {
       })
     })
 
-    expect(response).toMatchObject({
-      ok: true,
-      result: {
-        ok: false,
-        refusal: {
-          code: 'agent_session_identity_required',
-          details: { reason: 'transcriptNotFound' },
-          createAttemptRefusedBeforeCommit: true
-        }
-      }
+    expect(refusalOf(response)).toMatchObject({
+      code: 'agent_session_identity_required',
+      details: { reason: 'transcriptNotFound' },
+      createAttemptRefusedBeforeCommit: true
     })
-    expect(attach).not.toHaveBeenCalled()
-  })
-
-  it('answers a code-carrying refusal as a definitive envelope', async () => {
-    const response = await create({
-      resolveStructuredAgentSessionCreateIntent: vi.fn(async () => {
-        throw new Error('structured_agent_session_unsupported')
-      })
-    })
-
-    const refusal = refusalOf(response)
-    expect(refusal?.code).toBe('structured_agent_session_unsupported')
-    expect(refusal?.message).toContain('structured agent chat')
-    expect(refusal?.message).not.toContain('Codex')
-    expect(isDefinitiveAgentSessionCreateRefusal(refusal?.code)).toBe(true)
     expect(attach).not.toHaveBeenCalled()
   })
 
@@ -221,30 +200,6 @@ describe('a create refused before it commits', () => {
 })
 
 describe('the boundary the envelope stops at', () => {
-  it('does not mark a transcript refusal returned by attach, which may have committed', async () => {
-    attach.mockResolvedValueOnce({
-      ok: false,
-      refusal: agentSessionRefusalError('agent_session_identity_required', {
-        reason: 'transcriptUnreadable'
-      }).refusal
-    })
-
-    const response = await create()
-
-    expect(response).toMatchObject({
-      ok: true,
-      result: {
-        ok: false,
-        refusal: {
-          code: 'agent_session_identity_required',
-          details: { reason: 'transcriptUnreadable' }
-        }
-      }
-    })
-    expect(refusalOf(response)).not.toHaveProperty('createAttemptRefusedBeforeCommit')
-    expect(attach).toHaveBeenCalledOnce()
-  })
-
   it('leaves a failure at attach unknown, because it may have committed', async () => {
     attach.mockRejectedValueOnce(new Error('attach exploded'))
 

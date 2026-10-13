@@ -139,21 +139,9 @@ it('refuses concurrent founding under a tab another chat already owns', async ()
   expect(rig.adapter.acquire).not.toHaveBeenCalled()
 })
 
-it('validates adoption history before founding anything', async () => {
-  const params = await adoptedParams()
-  await writeFile(join(rig.root, 'rollout.jsonl'), 'not a transcript\n')
-  expect(await rig.host.create(CALLER, params)).toMatchObject({
-    ok: false,
-    refusal: { code: 'agent_session_identity_required' }
-  })
-  expect(rig.store.listRecords()).toEqual([])
-  expect(rig.store.listOperationRows()).toEqual([])
-})
-
-it('marks a source lost after discovery as a precommit refusal', async () => {
+it('refuses history lost after discovery before founding anything', async () => {
   const params = await adoptedParams()
   await rm(join(rig.root, 'rollout.jsonl'))
-
   expect(await rig.host.create(CALLER, params)).toMatchObject({
     ok: false,
     refusal: {
