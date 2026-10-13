@@ -120,14 +120,15 @@ export async function launchStructuredAgentSession(
   if (!result.ok) {
     const { code, message, ownerVerdict } = result.refusal
     const refusal = readAgentSessionRefusalReference(result.refusal)
-    const missingTranscriptBeforeCommit =
+    const transcriptRefusedBeforeCommit =
       !priorCreateOutcomeUnknown &&
       result.refusal.createAttemptRefusedBeforeCommit === true &&
       refusal?.code === 'agent_session_identity_required' &&
-      refusal.details?.reason === 'transcriptNotFound'
-    // A failed operation whose provider is proven gone is a failure a new operation may retry.
+      (refusal.details?.reason === 'transcriptNotFound' ||
+        refusal.details?.reason === 'transcriptUnreadable')
+    // A proven precommit transcript refusal lets a new operation retry.
     if (
-      !missingTranscriptBeforeCommit &&
+      !transcriptRefusedBeforeCommit &&
       !isDefinitiveAgentSessionCreateRefusal(code) &&
       ownerVerdict !== 'exited'
     ) {

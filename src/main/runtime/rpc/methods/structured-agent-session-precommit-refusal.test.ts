@@ -221,11 +221,11 @@ describe('a create refused before it commits', () => {
 })
 
 describe('the boundary the envelope stops at', () => {
-  it('does not mark a missing transcript returned from the commit path', async () => {
+  it('does not mark a transcript refusal returned by attach, which may have committed', async () => {
     attach.mockResolvedValueOnce({
       ok: false,
       refusal: agentSessionRefusalError('agent_session_identity_required', {
-        reason: 'transcriptNotFound'
+        reason: 'transcriptUnreadable'
       }).refusal
     })
 
@@ -233,7 +233,13 @@ describe('the boundary the envelope stops at', () => {
 
     expect(response).toMatchObject({
       ok: true,
-      result: { ok: false, refusal: { code: 'agent_session_identity_required' } }
+      result: {
+        ok: false,
+        refusal: {
+          code: 'agent_session_identity_required',
+          details: { reason: 'transcriptUnreadable' }
+        }
+      }
     })
     expect(refusalOf(response)).not.toHaveProperty('createAttemptRefusedBeforeCommit')
     expect(attach).toHaveBeenCalledOnce()

@@ -150,6 +150,22 @@ it('validates adoption history before founding anything', async () => {
   expect(rig.store.listOperationRows()).toEqual([])
 })
 
+it('marks a source lost after discovery as a precommit refusal', async () => {
+  const params = await adoptedParams()
+  await rm(join(rig.root, 'rollout.jsonl'))
+
+  expect(await rig.host.create(CALLER, params)).toMatchObject({
+    ok: false,
+    refusal: {
+      code: 'agent_session_identity_required',
+      details: { reason: 'transcriptUnreadable' },
+      createAttemptRefusedBeforeCommit: true
+    }
+  })
+  expect(rig.store.listRecords()).toEqual([])
+  expect(rig.store.listOperationRows()).toEqual([])
+})
+
 it('does not found a record whose account namespace its agent cannot drive', async () => {
   const params = createTestParams(undefined, {
     accountHome: { variable: 'CLAUDE_CONFIG_DIR', path: '/wrong/account' }

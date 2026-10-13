@@ -517,19 +517,19 @@ describe('structured agent session launch', () => {
   })
 
   it.each([
-    ['claude', 'local'],
-    ['codex', 'local'],
-    ['claude', 'runtime:server-1'],
-    ['codex', 'runtime:server-1']
+    ['claude', 'local', 'transcriptNotFound'],
+    ['codex', 'local', 'transcriptUnreadable'],
+    ['claude', 'runtime:server-1', 'transcriptUnreadable'],
+    ['codex', 'runtime:server-1', 'transcriptNotFound']
   ] as const)(
-    'uses %s precommit proof from %s without broadening the code allowlist',
-    async (agent, host) => {
+    'uses %s precommit %s proof from %s without broadening the code allowlist',
+    async (agent, host, reason) => {
       mockSupportedCreate(() => ({
         ok: false,
         refusal: {
           code: 'agent_session_identity_required',
           message: 'Host diagnostic',
-          details: { reason: 'transcriptNotFound' },
+          details: { reason },
           createAttemptRefusedBeforeCommit: true
         }
       }))
@@ -547,7 +547,7 @@ describe('structured agent session launch', () => {
         code: 'agent_session_identity_required',
         refusal: {
           code: 'agent_session_identity_required',
-          details: { reason: 'transcriptNotFound' }
+          details: { reason }
         }
       })
       expect(callStructuredAgentSession).toHaveBeenLastCalledWith(
@@ -558,7 +558,22 @@ describe('structured agent session launch', () => {
     }
   )
 
-  it.each(['recordMissing', 'transcriptUnreadable', undefined])(
+  it('keeps an older host transcript import refusal unknown without proof', async () => {
+    mockSupportedCreate(() => ({
+      ok: false,
+      refusal: {
+        code: 'agent_session_identity_required',
+        message: 'Source vanished during import',
+        details: { reason: 'transcriptUnreadable' }
+      }
+    }))
+
+    await expect(
+      launchStructuredAgentSession(createStructuredAgentSessionLaunchIntent('workspace-1', 'codex'))
+    ).rejects.toBeInstanceOf(StructuredAgentSessionCreateUnknownOutcomeError)
+  })
+
+  it.each(['recordMissing', undefined])(
     'keeps identity refusal with reason %s unknown despite an unrelated precommit field',
     async (reason) => {
       mockSupportedCreate(() => ({

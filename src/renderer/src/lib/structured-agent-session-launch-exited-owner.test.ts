@@ -175,40 +175,43 @@ describe('structured launch after a host-failed create', () => {
     }
   )
 
-  it('keeps an uncertain earlier create unknown when its replay refuses before commit', async () => {
-    let calls = 0
-    mocks.call.mockImplementation(async (_target, method) => {
-      if (method === 'agentSession.createSupport') {
-        return { supported: true }
-      }
-      if (calls++ === 0) {
-        throw new Error('Reply timed out after create may have committed')
-      }
-      return {
-        ok: false,
-        refusal: {
-          code: 'agent_session_identity_required',
-          details: { reason: 'transcriptNotFound' },
-          createAttemptRefusedBeforeCommit: true
+  it.each(['transcriptNotFound', 'transcriptUnreadable'] as const)(
+    'keeps an uncertain earlier create unknown when its replay refuses %s before commit',
+    async (reason) => {
+      let calls = 0
+      mocks.call.mockImplementation(async (_target, method) => {
+        if (method === 'agentSession.createSupport') {
+          return { supported: true }
         }
-      }
-    })
-    const started = startStructuredAgentLaunch(WORKTREE, 'codex', {
-      requestId: 'lost-create-reply',
-      resumeFrom: { providerSessionId: 'missing-thread' }
-    })
-    await started.launchResult.catch(() => undefined)
+        if (calls++ === 0) {
+          throw new Error('Reply timed out after create may have committed')
+        }
+        return {
+          ok: false,
+          refusal: {
+            code: 'agent_session_identity_required',
+            details: { reason },
+            createAttemptRefusedBeforeCommit: true
+          }
+        }
+      })
+      const started = startStructuredAgentLaunch(WORKTREE, 'codex', {
+        requestId: 'lost-create-reply',
+        resumeFrom: { providerSessionId: 'missing-thread' }
+      })
+      await started.launchResult.catch(() => undefined)
 
-    expect(getStructuredAgentSessionLaunchLifecycle(WORKTREE, started.sessionId)).toBe(
-      'visibility-unknown'
-    )
-    expect(shouldRetainStructuredAgentSessionLaunchTab(WORKTREE, started.sessionId)).toBe(true)
-    const envelopes = mocks.call.mock.calls
-      .filter(([, method]) => method === 'agentSession.create')
-      .map(([, , params]) => params.envelope)
-    expect(envelopes).toHaveLength(2)
-    expect(envelopes[1]).toBe(envelopes[0])
-  })
+      expect(getStructuredAgentSessionLaunchLifecycle(WORKTREE, started.sessionId)).toBe(
+        'visibility-unknown'
+      )
+      expect(shouldRetainStructuredAgentSessionLaunchTab(WORKTREE, started.sessionId)).toBe(true)
+      const envelopes = mocks.call.mock.calls
+        .filter(([, method]) => method === 'agentSession.create')
+        .map(([, , params]) => params.envelope)
+      expect(envelopes).toHaveLength(2)
+      expect(envelopes[1]).toBe(envelopes[0])
+    }
+  )
 
   it('fails with the host refusal when the provider is proven gone, and Retry starts it under a new operation', async () => {
     const sessionId = launch()
