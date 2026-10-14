@@ -8,7 +8,6 @@ import { StructuredConversationCommandController } from './structured-conversati
 
 import type { AgentJournalSnapshot } from '../../../shared/agent-session-journal-types'
 import type { AgentSessionExecutionLocation } from '../../../shared/agent-session-record'
-import type * as SessionWire from '../../../shared/agent-session-wire'
 import { createRestartReconciler } from './structured-agent-session-restart-reconcile'
 import type { AgentSessionSubscribeInput } from './structured-agent-session-subscribers'
 import { StructuredAgentSessionTaskQueue } from './structured-agent-session-task-queue'
@@ -19,6 +18,7 @@ import { StructuredAgentSessionHostRuntimeState } from './structured-agent-sessi
 import { structuredAgentSessionEntryDelegates } from './structured-agent-session-create'
 import type { StructuredAgentSessionLifetimeContext } from './structured-agent-session-host-lifetime'
 import * as agentStart from './structured-agent-session-agent-start'
+import { createStructuredAgentSessionHostMutationContext } from './structured-agent-session-host-mutation-wiring'
 import {
   createStructuredAgentSessionConversationLifetime,
   type StructuredAgentSessionConversationLifetime
@@ -50,6 +50,7 @@ import * as conversation from './structured-agent-session-host-delivery'
 import { structuredAgentSessionConversationFence } from './structured-agent-session-provider-child'
 import { wireStructuredAgentSessionQueuedMessages } from './structured-agent-session-queued-wiring'
 import * as sessionLogger from './structured-agent-session-logger'
+import { sleepStructuredAgentSessionWorkspace } from './structured-agent-session-workspace-sleep'
 export type { StructuredAgentSessionHostDeps } from './structured-agent-session-host-types'
 
 export class StructuredAgentSessionHost {
@@ -177,8 +178,7 @@ export class StructuredAgentSessionHost {
   private now = (): number => this.deps.now?.() ?? Date.now()
 
   hasSession = (sessionId: string): boolean => this.sessions.has(sessionId)
-  hasLoadedProviders = (): boolean =>
-    [...this.sessions.values()].some(({ child }) => child !== null)
+  hasLoadedProviders = (): boolean => [...this.sessions.values()].some((session) => !!session.child)
   sessionAgent = (sessionId: string) => this.deps.store.getRecord(sessionId)?.provider ?? null
 
   handleAdapterEvent = (event: Parameters<StructuredAgentSessionEventRecovery['handle']>[0]) =>
@@ -212,6 +212,20 @@ export class StructuredAgentSessionHost {
    *  `user-close` makes a turn it cuts short the user's cancellation; an `evict` leaves it news. */
   close: StructuredAgentSessionConversationLifetime['close'] = (sessionId, cause) =>
     this.lifetime.close(sessionId, cause)
+
+  /** One bounded host-owned snapshot; a tab need not be visible for its child to be stopped. */
+  sleepWorkspace = (workspaceId: string): Promise<{ stoppedSessionIds: string[] }> =>
+    sleepStructuredAgentSessionWorkspace(
+      {
+        deps: this.deps,
+        tasks: this.tasks,
+        lifetime: this.lifetime,
+        sessions: this.sessions,
+        deliveryRunning: (sessionId) => this.conversationDelivery.loop.isRunning(sessionId),
+        childWorkIncomplete: this.clientDelivery.childWorkIncomplete
+      },
+      workspaceId
+    )
 
   supportsCreate = (location: AgentSessionExecutionLocation, agent: string): boolean =>
     providerSupport.adapterSupportsCreate(this.deps.adapter, location, agent)
@@ -273,29 +287,20 @@ export class StructuredAgentSessionHost {
     }).finally(() => this.clientDelivery.closeAll())
   }
 
-  private mutationContext(): StructuredAgentSessionMutationContext {
-    return {
+  private mutationContext = (): StructuredAgentSessionMutationContext =>
+    createStructuredAgentSessionHostMutationContext({
       deps: this.deps,
       sessions: this.sessions,
-      publish: (sessionId, journal) => this.subscribers.publish(sessionId, journal),
-      conversation: this.lifetime.conversation,
-      readChildWork: this.clientDelivery.readChildWork,
-      publishChildWork: this.clientDelivery.publishChildWork,
-      childWorkIncomplete: this.clientDelivery.childWorkIncomplete,
+      subscribers: this.subscribers,
+      lifetime: this.lifetime,
+      clientDelivery: this.clientDelivery,
+      conversationDelivery: this.conversationDelivery,
+      queued: this.queued,
+      runtimeState: this.runtimeState,
+      attachContext: () => this.attachContext(),
       serialize: (sessionId, task) => this.serialize(sessionId, task),
-      openConversation: this.conversationDelivery.open,
-      ensureAgent: (sessionId) =>
-        agentStart.ensureStructuredAgentSessionAgentForOperation(this.attachContext(), sessionId),
-      joinChildClose: (sessionId) =>
-        agentStart.joinClosingStructuredAgentSessionChild(this.attachContext(), sessionId),
-      wakeDelivery: (sessionId) => this.conversationDelivery.loop.wake(sessionId),
-      stopAgent: (sessionId, ending) => this.lifetime.stopAgent(sessionId, ending),
-      wakeQueuedDrain: (sessionId) => this.queued.drain.schedule(sessionId),
-      acquireAborts: this.runtimeState.acquireAborts,
-      optionRevisions: this.runtimeState.optionRevisions,
       now: () => this.now()
-    }
-  }
+    })
 
   send = this.conversationCommands.send
 
@@ -317,14 +322,12 @@ export class StructuredAgentSessionHost {
   rewind = (caller: StructuredAgentSessionCaller, params: AgentSessionRewindParams) =>
     rewindStructuredAgentSession(this.mutationContext(), this.attachContext(), caller, params)
 
-  conversationCommand = (...args: Parameters<StructuredConversationCommandController['run']>) =>
-    this.conversationCommands.run(...args)
+  conversationCommand = this.conversationCommands.run
   /** Undefined means unavailable; an empty array is an authoritative catalog. */
   readCommands = (sessionId: string) => ({ commands: this.clientDelivery.readCommands(sessionId) })
 
   /** From the record store, never the session map: an idle-released chat has no map entry. */
-  handoffStatus = (sessionId: string): SessionWire.AgentSessionHandoffStatus =>
-    structuredAgentSessionOwnerStatus(this.deps, sessionId)
+  handoffStatus = (sessionId: string) => structuredAgentSessionOwnerStatus(this.deps, sessionId)
 
   history: StructuredAgentSessionBackgroundTaskChannel['history'] = (request, scope) =>
     this.backgroundTasks.history(request, scope)
