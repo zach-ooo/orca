@@ -8,6 +8,7 @@ import {
   type SubmissionRejectionFact
 } from '../../../shared/agent-session-failure'
 import { PROVIDER_EXIT_ROW_PREFIX } from '../../../shared/agent-session-stop-row-identity'
+import { isQueuedAgentJournalSubmission } from '../../../shared/agent-session-queued-submission'
 import { structuredAgentSessionFailureWordsContext } from './structured-agent-session-send-preparation'
 import type { AgentSessionJournal } from '../agent-session-journal/journal-store'
 import type { StructuredAgentSessionEndedEvent } from './structured-agent-session-adapter'
@@ -161,11 +162,19 @@ export async function endExitedStructuredAgentSessionChildUnderSerialize<
     })
     context.publishStatus?.(sessionId)
   }
+  const wakeQueuedDelivery = (): void => {
+    if (
+      !session.journal.submissions ||
+      session.journal.submissions().some(isQueuedAgentJournalSubmission)
+    ) {
+      context.wakeDelivery?.(sessionId)
+    }
+  }
   const record = context.store.getRecord(sessionId)
   if (!record || record.lease.handoffStage !== null) {
     // An acquisition or recovery already owns this lease's transition.
     endChild()
-    context.wakeDelivery?.(sessionId)
+    wakeQueuedDelivery()
     return
   }
   try {
@@ -260,7 +269,7 @@ export async function endExitedStructuredAgentSessionChildUnderSerialize<
     if (released && !expected) {
       context.publishFence(sessionId, session)
     }
-    context.wakeDelivery?.(sessionId)
+    wakeQueuedDelivery()
   }
 }
 
